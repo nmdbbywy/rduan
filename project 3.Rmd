@@ -1,0 +1,373 @@
+---
+title: "project3"
+author: "ME"
+date: "3/5/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+---
+title: "project3"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+title: "The Effect of Mandatory Jail Sentences on US Traffic Fatalities"
+author: ""
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+### 1. Introduction
+
+#### 1.1 Background
+Recently, the National Highway Traffic Safety Administration in the United States has reported that the number of traffic deaths rises from 33,838 to 36,560 since 2009 [1]. Also, traffic accidents are the major cause of death for people aged three to thirty-four [4]. This phenomenon motivates research on finding potential policies and associated measures that can reduce the number of traffic fatalities. 
+
+This study investigates if there are effects of the mandatory jail sentences on the number of traffic fatalities. In particular, this report is based on a longitudinal dataset, `Fatalities`, in an `R` package called `AER` because the dataset contains annual observations on U.S. traffic fatalities across 48 states in the U.S. from 1982 to 1988. Attention is also paid to omitted variables biases resulting from beer taxes, average miles per driver, economic conditions such as unemployment rate, personal income per capita etc.
+
+In short, we propose to use a fixed effects regression model to estimate effect of mandatory jail sentences on the number of fatalities. As a result, we have found that the association between mandatory jail sentences and the number of traffic fatalities is not statistically significant. To explore the causal effects of the mandatory jail sentence, we propose a potential framework based on literature about propensity score matching to measure the average casual effects of the mandatory jail sentence to the number of traffic fatalities.
+
+#### 1.2 Exploratory Data Analysis
+
+The dataset has 336 observations on 34 variables. It describes the number of traffic fatalities for 48 different states from 1982 to 1988 in the United States. Besides the number of traffic fatalities being recorded annually, the dataset includes other information such as the unemployment rate, minimum drinking age, employment and population ratio, per capita personal income, tax on a case of beer, percent of southern baptist, average miles per driver, the percentage of young drivers aged from 15 to 24 etc. We summarize our findings below:
+
+```{r load_data, echo=FALSE, warning=FALSE, message=FALSE, include=FALSE}
+# load the package and the dataset
+library(plm)
+library(AER)
+library(ggplot2)
+library(naniar)
+data(Fatalities)
+#Fatalities <- read.csv('Fatalities.csv')
+# obtain the dimension and inspect the structure
+dim(Fatalities)
+# define the fatality rate
+Fatalities$fatal_rate <- Fatalities$fatal / Fatalities$pop
+```
+
+* There is a rising trend across states for the total number of traffic fatalities from 1982 to 1988 (see figure 1 left panel).
+
+```{r lineplot for fatalities, echo=FALSE, warning=FALSE, message=FALSE, fig.width=10, fig.height=5, fig.align = "center"}
+# Look at the fatalities rate in general (Not informative)
+trend <- ggplot(data=Fatalities, aes(x=year, y=fatal, group=1)) +stat_summary(fun.y = sum, geom = "line") + ylab("Total number of fatalities across states")
+```
+
+* There is a strong positive correlation between the number of population and the number of traffic fatalities (see figure 1 right panel). 
+
+```{r scatterplot, echo=FALSE, warning=FALSE, message=FALSE, fig.width=10, fig.height=5, fig.align = "center"}
+# Scatterplot
+theme_set(theme_bw())  # pre-set the bw theme.
+g <- ggplot(Fatalities, aes(pop, fatal)) + geom_jitter(width = .5, size=1) +
+  labs(y="The number of traffic fatalities", 
+       x="The number of population")
+
+```
+
+* There is a missing record of having mandatory jail sentences in California in 1988.
+
+```{r missingdata, echo=FALSE, warning=FALSE, message=FALSE, fig.width=10, fig.height=5, fig.align = "center"}
+# Check missing value of the dataset
+miss_map <- vis_miss(Fatalities)
+
+# Show all the rows that contain missing values
+# California has no record for jail sentence in 1988
+# Fatalities[rowSums(is.na(Fatalities)) > 0,]
+```
+
+* There are only 15 out of 48 states that have implemented mandatory jail sentences.
+
+```{r countJail, echo=FALSE, warning=FALSE, message=FALSE, fig.width=10, fig.height=5, fig.align = "center"}
+# How many states implemented jail sentence? # only 15 states have jail sentence out of 
+states_has_jail <- unique(Fatalities[Fatalities$jail == 'yes',]$state)
+subset_jailed_state_data <- Fatalities[Fatalities$state %in% states_has_jail ,]
+
+# How many of them have changed the policy during 1982-1988?
+Fatalities$jail_idx <- ifelse(Fatalities$jail == 'yes', 1, 0)
+```
+
+* The number of traffic fatalities differs depending on whether or not there is a mandatory jail sentence. Note that the number of fatalities is lower in general when there is a mandatory jail sentence enforced (see figure 1 middle panel). 
+
+
+```{r boxplot, echo=FALSE, warning=FALSE, message=FALSE, fig.width=10, fig.height=3, fig.align = "center"}
+# Check the effect of jail sentence on fatalities rate
+box<- ggplot(Fatalities[!is.na(Fatalities$jail),], aes(x=jail, y=fatal)) +
+  geom_boxplot(fill='#A4A4A4', color="black")+ ylab("The number of traffic fatalities")+
+  theme_classic()
+
+require(gridExtra)
+grid.arrange(trend, box, g, nrow = 1)
+```
+***Figure 1***: *Left panel*: A line chart shows the number of traffic fatalities by year from 1982 to 1988. *Middle panel*: A boxplot shows the distributions of the number of traffic fatalities based on whether or not there is a mandatory jail sentence across states and years. 
+*Right panel*: A scatterplot shows the association between the number of traffic fatalities and the number of population across states and years.
+
+
+### 2. Analysis Plan
+
+#### 2.1 Fixed Effects Regression Model
+
+As suggested by some literature [2 & 3], the fixed-effects model is commonly used to estimate the number of traffic fatalities of this dataset. We propose a fixed-effects regression model.  
+
+$Y_{it}\ =\ \beta_kX_{k,it} + \alpha_i+ \lambda_t+\ \epsilon_{it},\ i = 1,...,48,\ t = 1,...,7, k = 1,...,6$
+
+***Explanation of the notation***
+
+* $Y_{it}$ denotes the number of traffic fatalities at the $i$-th state in the  $t$-th year.
+
+* $\beta_{k}X_{k,it}$ refers to the six variables of interest and their respective regression coefficients $\beta_{k}$ associated with the $i$th state and year $t$. Among these variables, the `jail` factor is our primary interest. Other representative variables including `beer taxes`, `spirits consumption`, `miles`, `unemployment ratio`, `income`, and  are chosen based on the literature review [2].  
+
+* $\alpha_i$ and $\lambda_t$ are un-observed individual specific effects. $\alpha_i$ stands for fixed state effects and $\lambda_t$ stands for fixed time effects.  
+
+* Lastly, $\epsilon_{it}$ represents the un-observable random error of $i$-th state in the $t$-th year.
+
+***Justification of model choice***
+
+_Fixed effects vs. random effects:_ Adding the entity and time (state & year) fixed effects terms helps eliminate the omitted variable bias caused by excluding unobserved variables that either change over time but constant across entities or differ across entities but are constant over time. We did not apply random effects because we believe the omitted variables are correlated with the explanatory variables that are in the model. 
+
+_Selection of covariates:_ In addition to the fixed effect terms, bias could be further reduced with the additonal variables that reflect sociodemographic characteristics as suggested by literature [2]. `income` and `unemployment` are common indicators of economic conditions. `spirits consumption` and `beertax` are drunk-drive related variables. Lastly, `miles` is related to driving behavior in general.       
+
+_Missing data:_ To obtain balanced data, we impute the missing observation of the `jail` variable in 1988 California with a 'no' based on policy research [5].     
+
+```{r model, echo=FALSE, warning=FALSE, message=FALSE, fig.width=10, fig.height=5, fig.align = "center"}
+
+Fatalities$jail[is.na(Fatalities$jail)] <- 'no' 
+
+fatalities_model <- plm(fatal ~ jail + unemp + income + beertax + spirits + miles,  
+                        index = c("state", "year"),
+                        model = "within",
+                        effect = "twoways",
+                        data = Fatalities)
+```
+
+***The assumptions of the fixed effects regression model*** 
+
+The following assumptions are made when we specifically introduce the unobserved state fixed effects and time fixed effects in a fixed effect regression model. We will further discuss whether these assumptions hold in the result of model diagnostics.
+
+* **Normally distributed errors with constant variance**: Each random error, $u_{it}$, is independent and identically distributed (i.i.d.) from a normal distribution with mean zero and constant variance [6]. Note that this can be problematic since the observations within each state may correlate with each other due to the common nature of panel data [3]. 
+
+* **Strict Exogeneity**: The random error, $u_{it}$, is uncorrelated with all the variables of interests (`jail`, `beer taxes`, `income`, `miles`, `unemployment ratio`, `spirits consumption`) for the `i`-th state in `t`-th year. We face omitted variables bias when this assumption is violated [3].
+
+* **Independence of the observations**: The variables of interests (`jail`, `beer taxes`, `income`, `miles`, `unemployment ratio`, `spirits consumption`), $X_{k,it}$, and the random error, $u_{it}$, are independent and identically distributed (i.i.d.) from their joint distribution. This assumption ensures that the observations are i.i.d. across states and time [3].
+
+* **Outliers**: Large outliers in the observations and the selected variables of interests (`jail`,`beer taxes`,`miles`, `unemployment ratio`, `spirits consumption`)are rare [3].
+  
+* **Multicollinearity**: There cannot be two or more predictor variables that are highly correlated with each other [3].
+
+#### 2.2 Model Diagnostics
+
+Next, we discuss various approaches to verify whether the model assumptions hold via hypothesis testing and visual reasoning with plots.
+
+* **Normally distributed errors with constant variance**: We will utilize a normal Q-Q plot and a residuals vs. fitted values plot to first examine this assumption. Then, we conduct a Shapiro–Wilk test and the Breusch-Pagan test to see if the residuals follow a normal distribution with constant variance. Also, we will use the Breusch-Godfrey/Wooldridge test to see if autocorrelation exists in the data. 
+
+* **Strict Exogeneity**: We will use the Hausman test to see if there is a correlation between the random errors and the regressors in the model. 
+
+* **Independence of the observations**: As the dataset is based on an observational study rather than a randomized experiment, this gives challenges to the assumption of independence. Nonetheless, with the best of our knowledge, we will use the Pasaran CD test over the Breusch-Pagan LM test to see whether the residuals are correlated across states for validating this assumption, given that the number of states is larger than the number of years in our data [17].
+  
+* **Outliers**: We will use the residuals vs. leverage plot to show whether there exist any outliers. 
+  
+* **Multicollinearity**: One way of diagnosing multicollinearity is through the calculation of variance inflation factors (VIFs). Multicollinearity exists if all the VIF scores are very high. 
+
+#### 2.3 Hypothesis Testing
+
+Moreover, we can verify whether our proposed fixed-effects model is a better choice compared to an ordinary least square regression model by using the F-test with a null hypothesis that the state-fixed effects and time-fixed effects are not significant in our model for this dataset. 
+
+### 3. Result
+#### 3.1 Fixed Effects Regression Model
+
+` Table 1` shows a summary of the fitted regression coefficients. The value of regression coefficients indicates how much the number of traffic fatalities changes per state and per year when the variable increases by one unit. The variable `jail` has a negative estimate of -7.66. However, due to the large standard error, we can not draw any association. Test statistics on the null hypothesis $H_0: \beta_1 = 0$ suggests that jail does not have a significant influence on the dependent variable Y. One the other hand, coefficients for other covariates, such as `unemployment rate` and 'income' are highly statistically significant. Overall, the F-test for the model gives a significant result, suggesting that the model provides a better fit compared to the model without the chosen variables. However, the model achieves a relatively low $R^2$ value of 0.27. This indicates only a smaller portion of the variation in the number of fatalities can be explained by the chosen predictor variables.
+
+
+**Table 1: Regression Coefficients**
+
+|                      |   Jail  | Unemployment rate  | Income |  Beer taxes  |   Spirits |Miles  |
+|:------------|-----:|--------------:|--------------:|-------:|--------------------:|-----------:|
+|Estimate & Significance level| -7.66 | -28.15*** |0.04*** | -258.83** |    144.59* | 0.002 | 
+| Standard Error          |  (32.26)|  (5.95)  | (0.01) |  (89.44) |  (64.78)  | (0.005) |
+
+
+#### 3.2 Model Diagnostics
+
+We now summarize the findings of the model diagnostics under each assumption of the fixed effects regression model below. 
+
+* **Normally distributed errors with constant variance**: In `figure 2`, the normal QQ plot shows that the distribution of the residuals is heavy-tailed. Also, the residuals vs. fitted values plot shows that residuals are not distributed with constant variance. At the significance level 0.05, we conclude that the distribution of the residuals is unlikely to follow a normal distribution with constant variance based on the results from Shapiro–Wilk test, Breusch-Pagan test with both p-values being less than 0.05. We also see that residuals are unlikely to be independent as there exists autocorrelation in our data by the result of the Breusch-Godfrey/Wooldridge test with a p-value less than 0.05 at the same significance level 0.05. In a search for a remedy to the non-normality issue, we considered taking box-cox transformation of the response variable (the number of traffic fatalities). However, the box-cox plot indicates that no transformation is needed.
+
+* **Strict Exogeneity**: The result of the Hausman Test shows that we can conclude that it is unlikely that the random errors are uncorrelated with the regressors by rejecting the null hypothesis with a p-value less than 0.05 at the significance level 0.05. Thus, the assumption of strict exogeneity is not satisfied. Note that the null hypothesis of the Hausman Test is that there is no correlation between the predictor variables and the error terms.
+
+* **Independence of the observations**: At significance level 0.05, we can conclude that the observations are unlikely to be dependent across states by failing to reject the null hypothesis of the Pesaran CD test with a p-value greater than 0.05. 
+  
+* **Outliers**: In `figure 2`, the residuals vs. leverage plot shows that there is a potential outlier (data point no. 171) in our dataset. We will conclude the occurrence of the outliers is rare in our data so that the assumption is satisfied. 
+  
+* **Multicollinearity**: We have found that for each regressor has slightly over VIF score of 1, indicating that there is no perfect multicollinearity.
+
+#### 3.3 Hypothesis Testing
+
+At significance level 0.05, we can reject the null hypothesis with a p-value less than 0.05 and conclude that fixed effect regression model is a better choice than the ordinary least square (OLS) regression model for the `Fatalities` dataset.
+
+```{r model diagnostics p1, echo=FALSE, warning=FALSE, message=FALSE, fig.width=10, fig.height=3, fig.align = "center"}
+par(mfrow=c(1,3))
+# Residuals vs. fitted values
+`Fitted Value` <- as.numeric(fatalities_model$model[[1]] - fatalities_model$residuals)
+plot(`Fitted Value`, fatalities_model$residuals, ylab="Residuals", main="Residuals vs. Fitted Values Plot")
+abline(h=0)
+
+# Normal qqplot
+qqnorm(fatalities_model$residuals) 
+qqline(fatalities_model$residuals)
+
+# Residuals vs Leverage plot
+lin_mod <- lm(fatal ~ jail + unemp + income + beertax + spirits + miles + factor(year) + factor(state), data = Fatalities)
+plot(lin_mod, which = 5)
+
+```
+***Figure 2***: *Left panel*: A residuals vs. fitted values plot shows that the residuals are distributed with non-constant variance. *Middle panel*: A normal QQ plot shows that the distribution of the residuals is heavy-tailed. *Right panel*: A residuals vs. leverage plot shows any potential outliers in the dataset. Any point that is deviating from the majority of the data points both in x-axis and y-axis is considered an outlying observation. Here, we see that the point no. 171 is a potential outlier.  
+```{r model diagnostics p2, echo=FALSE, warning=FALSE, message=FALSE, fig.width=10, fig.height=5, fig.align = "center", include=FALSE}
+
+# Box Cox Procedures
+library(MASS)
+# No improvemnt can be done for the response variable
+boxcox(fatal ~ jail + unemp + income + beertax + spirits + miles, data = Fatalities)
+
+
+# See the correlation between errors and regression exists by Hausman test
+random <- plm(fatal ~ jail + unemp + income + beertax + spirits + miles,  
+                        index = c("state", "year"),
+                        model = "random",
+                        data = Fatalities)
+
+phtest(fatalities_model, random)
+
+# Testing for heteroskedasticity 
+# Presence of heteroskedasticity at significanc level of 0.05.
+# If hetersokedaticity is detected you can use robust covariance matrix to account for it.
+library(lmtest)
+bptest(fatal ~ jail + unemp + income + beertax + spirits + miles, data = Fatalities, studentize=F)
+
+# Testing for autocorrelation with Breusch-Godfrey/Wooldridge test, the null is that there is not serial correlation.
+pbgtest(fatalities_model)
+
+# Shapiro-Wilk Normality test
+# It doesn't follow a normal distribution at 0.05 siginificance level
+shapiro.test(x = fatalities_model$residuals)
+
+
+
+# Pearson CD test for cross-sectional dependence
+# No cross-sectional dependence
+pcdtest(fatalities_model, test = c("cd"))
+
+# Test for autocorrelation
+# It is autocorrelated at the siginificance level of 0.05.
+pbgtest(fatalities_model)
+
+# VIF scores
+# Assuming we've already fit our plm() model...
+design.matrix <- as.data.frame(model.matrix(fatalities_model))
+
+# Get the time-demeaned response variable, lifeExp
+design.matrix$fatal <- plm::Within(
+  plm::pdata.frame(Fatalities, c("state", "year"))$fatal)
+
+# Fit the OLS model on the demeaned dataset
+model.ols <- lm(fatal ~ jailyes + unemp + income + beertax + spirits + miles, data = design.matrix)
+
+# Calculate VIF scores
+# The 
+car::vif(model.ols)
+```
+
+```{r last testing, results="hide", echo=FALSE, warning=FALSE, message=FALSE}
+
+ols <- lm(fatal ~ jail + unemp + income + beertax + spirits + miles, data = Fatalities)
+
+pFtest(fatalities_model, ols)
+```
+### 4. The Causal Interpretation of the Proposed Model
+
+#### 4.1 Causal Model Assumptions
+
+In our study, we are interested in estimating the causal effect of a binary `jail` treatment on the number of fatalities across states over seven years. However, it is problematic to estimate the average causal effect (ACE) from non-experimental data, where the treatment is not manipulable by the researcher and cannot be randomly assigned [9]. Thus, we can use propensity score matching to make sure the treatment (jail) assignments are independent of the potential outcomes by balancing on observed covariates [10], which will be discussed in section 4.2. As with all statistical methods, propensity score matching comes with the following assumptions that must be understood in order to interpret the ACE appropriately.
+
+**Stable unit treatment value assumption (SUTVA)**: 
+This assumption states that the outcomes of one individual are not affected by the treatment assignment of any other individuals, which means there is no hidden version of the treatment. In our study, whether a state has a mandatory jail sentence does not affect the number of fatalities of other states. Another facet of this assumption indicates that there is only one version of the treatment. In other words, how the policy is implemented should not affect the potential outcomes. We learned from research that mandatory jail policy of different states took place in a single year and may involve different compulsory jail time for each offender. In our case, we assume that different mandatory jail time is by nature homogeneous.
+ 
+**Positivity**: 
+This assumption states that there is a non-zero probability of receiving every level of treatment (Yes or No) for each subject, which is also known as overlap assumption [11]. We make the positivity assumption that, in principle, each state can be assigned any level of jail treatment in one year.
+
+**Unconfoundedness**: 
+This assumption implies that we have enough controls (usually pre-treatment covariates and associated outcomes) so that, conditional on the controls, the treatment assignment is substantially randomized [12]. In this case, we assume that we observe all the covariates that are relevant to the number of fatalities. Besides, these covariates are not affected by the mandatory jail sentence. Thus, we can state that the jail treatment assignment is conditionally independent of the potential outcomes given the covariates.
+
+#### 4.2 Propensity Score Matching
+
+As mentioned in 4.1, the states with and without jail punishment are not directly comparable because the covariates are not balanced[13]. For example, we cannot assume jail punishment can prevent a high number of fatalities while the alcohol breath test is a covariate. Some states with jail punishment also have alcohol breath tests, while some states without jail punishment do not have alcohol breath tests. Thus, even if the number of fatalities is lower in the states that have jail sentences, it could be attributed to the implementation of breath tests rather than jail punishment. Therefore, for a more in-depth investigation of the jail policy, some controls are needed. The main idea is to control other factors affecting fatalities to some extent, and jail penalties would be the main difference between the treatment and control groups. In this case, a statistical method called propensity score matching can alleviate the differences between the two groups and make them comparable. The propensity score matching can reduce the impact of covariates, and adequately balanced the variability of covariates between the control group and the treatment group [14]. As a result, the difference in the fatalities would be more attributed to the implementation of jail punishment. The steps for implementing propensity score matching are as follows:
+
+**1. Computing the propensity score **: 
+Some covariates are needed to be invested and controlled when calculating the propensity score. After an in-depth exploration of the dataset, we select the unemployment rate, bear tax, minimal legal drink age, breath test and unit area population as the covariates, which would interfere with the fatalities. These covariates are used to calculate the propensity scores and according to which the sample is divided into several sub-samples. These sub-samples have similar characteristics and are relatively comparable. However, categorizing the samples with propensity score would be rough and lack analytical accuracy. A matching process is required for filtering incomparable cases. 
+
+**2. Matching method**:
+Since the sample size is limited, optimal matching methods is an appropriate method, which can produce a better overall matched sample [15]. Optimal matching is to find the total minimal differences between treatment and control groups, in which imbalance is reduced as much as possible. Besides, matching without replacement is used because it would have no variance-bias trade-off [16] and have equal units in both groups [14]. We choose the Robust Mahalanobis Distance as the measurement for matching because it is a superior method to calculate the distance between two points in each group and find the optimal sets of matches [17]. In addition, we use caliper as an acceptable maximum distance criterion when measuring Robust Mahalanobis Distance. When optimal matching distance exceeds the caliper, it means these cases are extreme and needed to be dropped for drawing causal inference[15]. 
+
+**3. Assessing the matching quality**:
+After the matching procedure is completed, the quality of each match can be checked by a standardized difference. The standardized difference measures the balance of covariates between treated and untreated subjects [18]. If matching is not completely successful, remedial measures have to be taken, such as re-estimation of propensity score by adding interaction covariates terms [16].
+
+**4. Causality analysis**:
+In reality, even if the propensity score matching is properly processed, one can still observe moderately standardized differences in matching samples [18]. The variabilities of covariates, even in large samples, are generally different in treatment and control groups. Therefore, it is reasonable to consider the heterogeneity of causal effects (subjects are naturally different) [14]. Under the simplified version, the expected difference in fatalities within each match is equal to the average treatment effect for each sub-sample [14]. We can simply test the average effect of jail punishment on the number of fatalities by an ordinary t-test [13]. If the test shows that the main treatment effect exists, it can be concluded that jail punishment could reduce the average traffic fatalities.
+
+### 5. Conclusion and Recommendations
+
+In conclusion, mandatory jail sentences do not have a significant association on the number of traffic fatalities, but we see that economic conditions are very likely to be associated with the number of fatalities. We should explore other possible models since several assumptions of the fixed effect regression model are not well satisfied. Also, strong assumptions need to be made in order for our causal model to be feasible. 
+
+For any federal policy makers, our study shows that we should be conservative on implementing mandatory jail sentences in the effort of reducing the number of traffic fatalities as we do not have any strong evidence that mandatory jail sentences can reduce the number of traffic fatalities. Rather, we need to focus more on the effects of beer tax on the number of traffic fatalities as the tax policy can be controlled relatively easier in a federal level and our study shows that there is a significant association between the number of fatalities and beer tax.
+
+
+### Appendix I. Reference
+[1] Insurance information institute. Facts + Statistics: Highway safety. https://www.iii.org/fact-statistic/facts-statistics-highway-safety
+
+[2] Ruhm, C. J. (1996). Alcohol Policies and Highway Vehicle Fatalities. Journal of Health Economics, 15, 435–454.
+
+[3] Christoph Hanck, Martin Arnold, Alexander Gerber and Martin Schmelzer. Introduction to Econometrics with R. https://www.econometrics-with-r.org/
+
+[4] Kenkel, D. (1993). Drinking, Driving, and Deterrence: The Effectiveness and Social Costs of Alternative Policies. The Journal of Law & Economics, 36(2), 877-913. Retrieved February 12, 2020, from www.jstor.org/stable/725811
+
+[5] McCurley, John. “California DUI: What Are the Penalties?”, 6 Mar. 2019, https://dui.drivinglaws.org/resources/dui-laws-state/penalties-dui-california.htm
+
+[6] Crawley, M. J. 2015. Statistics: An Introduction Using R 2nd ed. Chichest, West Sussex, United Kingdom: John Wiley & Sons.
+
+[7] Kurt Schmidheiny. Panel Data: Fixed and Random Effects. https://www.schmidheiny.name/teaching/panel2up.pdf
+
+[8] Mayer, Alexander, Testing for Strict Exogeneity in Fixed-Effects Panel Models (November 30, 2016). Available at SSRN: https://ssrn.com/abstract=2769747 
+
+[9] Nichols, Austin. "Causal inference with observational data." The Stata Journal 7.4 (2007): 507-541.
+https://www.stata-journal.com/sjpdf.html?articlenum=st0136
+
+[10] Rubin, D. B. (2005). Causal Inference Using Potential Outcomes: Design, Modeling, Decisions. Journal of the American Statistical Association 100 322–331.
+https://5harad.com/mse331/papers/rubin_causal_inference.pdf
+
+[11] D'Amour, Alexander, et al. "Overlap in observational studies with high-dimensional covariates." arXiv preprint arXiv:1711.02582 (2017).
+https://arxiv.org/pdf/1711.02582.pdf
+
+[12] Imbens, Guido, and Jeffrey Wooldridge. "Estimation of average treatment effects under unconfoundedness." Imbens & Wooldridge, What’s new in econometrics, Lecture Notes 1 (2007). 
+http://www.nber.org/WNE/WNEnotes.pdf
+
+[13] Propensity score,Pennstate,College of Health and Human Development.
+
+[14] Guido W. Imbens& Donald B. Rubin.(2015) CAUSAL INFERENCE. for Statistics, Social, and Biomedical Sciences An Introduction. New York, NY: Cambridge University Press. 233-252, 382-400.
+
+[15]Lunt,Mark.(2014) Selecting an Appropriate Caliper Can Be Essential for Achieving Good Balance With Propensity Score Matching. Am J Epidemiol,179(2): 226–235.
+
+[16] Marco Caliendo & Sabine KopeinigSome.(2005) Practical Guidance for the Implementation of Propensity Score Matching. Discussion Paper No. 1588.
+
+[17] Robert A. Greevy Jr.1,2, Carlos G. Grijalva(2011).Reweighted Mahalanobis distance matching for cluster-randomized trials with missing data. Pharmacoepidemiology and drug Safety 2012; 21(S2): 148–154
+
+[18] Austin,Peter,C.(2009)Balance diagnostics for comparing the distribution of baseline covariates between treatment groups in propensity-score matched samples. Stat Med. 2009 Nov 10; 28(25): 3083–3107.
+
+[19] De Hoyos, R. E., & Sarafidis, V. (2006). Testing for cross-sectional dependence in panel-data models. The stata journal, 6(4), 482-496. https://www.stata-journal.com/sjpdf.html?articlenum=st0113
+
+
+
